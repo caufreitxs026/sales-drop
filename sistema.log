@@ -1,0 +1,14 @@
+2025-12-02 15:42:00,058 - INFO - Iniciando processamento: uploads/692f32f66d2e4_BASE_NF_FISCAL_43_BROK_MIRASOL_2025_10.xlsx
+2025-12-02 15:42:41,365 - INFO - Processamento finalizado com sucesso.
+2025-12-02 15:42:41,427 - CRITICAL - Erro Geral: [Errno 22] Invalid argument
+2025-12-02 15:43:29,226 - INFO - Iniciando processamento: uploads/692f335017b16_BASE_NF_ANOMES_43_BROK_MIRASOL_2025_9.xlsx
+2025-12-02 15:44:13,228 - INFO - Processamento finalizado com sucesso.
+2025-12-02 15:52:27,006 - INFO - Iniciando processamento: uploads/692f3569ecbb4_BASE_NF_ANOMES_43_BROK_MIRASOL_2025_9.xlsx
+2025-12-02 15:53:12,945 - INFO - Processamento finalizado com sucesso.
+2025-12-02 15:53:13,074 - CRITICAL - Erro Geral: [Errno 22] Invalid argument
+2025-12-02 15:54:24,914 - INFO - Iniciando processamento: uploads/692f35dfeab60_BASE_NF_FISCAL_43_BROK_MIRASOL_2025_10.xlsx
+2025-12-02 15:55:06,384 - INFO - Processamento finalizado com sucesso.
+2025-12-02 16:08:14,217 - INFO - Iniciando processamento: uploads/692f391d2be12_BASE_NF_FISCAL_43_BROK_MIRASOL_2025_10.xlsx
+2025-12-02 16:08:53,278 - INFO - Processamento finalizado com sucesso.
+2025-12-02 16:10:35,850 - INFO - Iniciando processamento: uploads/692f39aadd61d_BASE_NF_FISCAL_43_BROK_MIRASOL_2025_10.xlsx
+2025-12-02 16:11:14,968 - INFO - Processamento finalizado com sucesso.

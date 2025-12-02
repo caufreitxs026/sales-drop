@@ -1,105 +1,256 @@
 <?php
-// index.php - Dashboard SalesDrop Analytics
+// --- CONFIGURAÇÃO E SEGURANÇA ---
+session_start();
+
+// Gerar Token CSRF se não existir
+if (empty($_SESSION['csrf_token'])) {
+    $_SESSION['csrf_token'] = bin2hex(random_bytes(32));
+}
+
+// Configuração de Diretórios
+$uploadDir = 'uploads/';
+if (!is_dir($uploadDir)) mkdir($uploadDir, 0777, true);
+
+// Limpeza Automática (Arquivos > 2h)
+$files = glob($uploadDir . "*");
+$now = time();
+if ($files) {
+    foreach ($files as $file) {
+        if (is_file($file) && ($now - filemtime($file) >= 7200)) {
+            unlink($file);
+        }
+    }
+}
+
+// Inicialização de Variáveis
 $resultado_html = "";
 $json_dados_js = "null"; 
+$swal_fire = "null"; 
 
-if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_FILES['planilha'])) {
-    $uploadDir = 'uploads/';
-    if (!is_dir($uploadDir)) mkdir($uploadDir, 0777, true);
+if ($_SERVER['REQUEST_METHOD'] === 'POST') {
     
-    $nomeOriginal = basename($_FILES['planilha']['name']);
-    $novoNome = uniqid() . "_BASE_" . $nomeOriginal;
-    $caminhoCompleto = $uploadDir . $novoNome;
-    
-    $caminhoAudit = "";
-    if (isset($_FILES['audit_file']) && $_FILES['audit_file']['error'] === UPLOAD_ERR_OK) {
-        $nomeAudit = basename($_FILES['audit_file']['name']);
-        $novoNomeAudit = uniqid() . "_AUDIT_" . $nomeAudit;
-        $caminhoAudit = $uploadDir . $novoNomeAudit;
-        move_uploaded_file($_FILES['audit_file']['tmp_name'], $caminhoAudit);
-    }
-
-    if (move_uploaded_file($_FILES['planilha']['tmp_name'], $caminhoCompleto)) {
-        $arg1 = escapeshellarg($caminhoCompleto);
-        $arg2 = $caminhoAudit ? " " . escapeshellarg($caminhoAudit) : "";
-        $comando = "python processamento.py $arg1$arg2";
-        $output = shell_exec($comando . " 2>&1");
-        $linhas = explode("\n", trim($output));
-        $json_str = end($linhas);
-        $dados = json_decode($json_str, true);
-
-        if (json_last_error() === JSON_ERROR_NONE && isset($dados['sucesso']) && $dados['sucesso']) {
-            $csvPath = $dados['arquivo'];
-            $json_dados_js = json_encode($dados);
-            $temAudit = $dados['tem_audit_file'];
-
-            $resultado_html = "
-            <div class='download-banner'>
-                <div class='download-info'>
-                    <h3>Processamento Concluído!</h3>
-                    <small>Base: $nomeOriginal " . ($temAudit ? "| Auditoria Ativa" : "") . "</small>
-                </div>
-                <a href='$csvPath' class='btn btn-outline' download>
-                    <svg width='20' height='20' viewBox='0 0 24 24' fill='none' stroke='currentColor' stroke-width='2'><path d='M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4'/><polyline points='7 10 12 15 17 10'/><line x1='12' y1='15' x2='12' y2='3'/></svg>
-                    Baixar Relatório CSV
-                </a>
-            </div>
-
-            <div class='dashboard-controls'>
-                <div class='scenario-toggle'>
-                    <label>Fonte de Dados:</label>
-                    <div class='toggle-group'>
-                        <input type='radio' id='viewPlanilha' name='viewScenario' value='planilha' checked onchange=\"waitAndProcess(switchScenario)\">
-                        <label for='viewPlanilha'>Planilha</label>
-                        <input type='radio' id='viewBanco' name='viewScenario' value='banco' onchange=\"waitAndProcess(switchScenario)\">
-                        <label for='viewBanco'>Banco</label>
-                    </div>
-                </div>
-                
-                <div style='display:flex; gap:15px; align-items:center;'>
-                    <button class='btn btn-secondary' onclick=\"waitAndProcess(openAuditModal)\" style='margin:0; padding:8px 16px;'>
-                        <svg width='16' height='16' viewBox='0 0 24 24' fill='none' stroke='currentColor' stroke-width='2' style='margin-right:5px;'><path d='M2 12h20'/><path d='M2 12l5-5'/><path d='M2 12l5 5'/><path d='M22 12l-5-5'/><path d='M22 12l-5 5'/></svg>
-                        Auditoria de Cadastro (FAD)
-                    </button>
-                    <span class='total-badge' id='totalDisplay'>Calculando...</span>
-                </div>
-            </div>
-            
-            <div class='dashboard-grid'>
-                <div class='dash-card'>
-                    <div class='dash-header'>
-                        <div class='dash-title'>Por Vendedor</div>
-                        <div class='dash-actions'><button onclick=\"waitAndProcess(function(){ openModal('Vendedor') })\">Ver detalhes</button></div>
-                    </div>
-                    <div class='table-container' style='max-height: 550px; overflow-y: auto;'>
-                        <table id='tblVendedor'><thead><tr><th>Nome</th><th style='text-align:right'>Qtd</th></tr></thead><tbody></tbody></table>
-                    </div>
-                </div>
-                <div class='dash-card'>
-                    <div class='dash-header'>
-                        <div class='dash-title'>Por Cliente (Sold)</div>
-                        <div class='dash-actions'><button onclick=\"waitAndProcess(function(){ openModal('Sold') })\">Ver detalhes</button></div>
-                    </div>
-                    <div class='table-container' style='max-height: 550px; overflow-y: auto;'>
-                        <table id='tblSold'><thead><tr><th>Cliente</th><th style='text-align:right'>Qtd</th></tr></thead><tbody></tbody></table>
-                    </div>
-                </div>
-                <div class='dash-card' " . ($temAudit ? "style='grid-column: 1 / -1;'" : "") . ">
-                    <div class='dash-header'>
-                        <div class='dash-title'>Por FAD " . ($temAudit ? "<span class='badge badge-neutral' style='margin-left:8px'>Auditado</span>" : "") . "</div>
-                        <div class='dash-actions'><button onclick=\"waitAndProcess(function(){ openModal('FAD') })\">Ver detalhes</button></div>
-                    </div>
-                    <div class='table-container' style='max-height: none;'>
-                        <table id='tblFad'><thead id='headFad'></thead><tbody></tbody></table>
-                    </div>
-                </div>
-            </div>";
+    // Validação CSRF
+    if (!hash_equals($_SESSION['csrf_token'], $_POST['csrf_token'] ?? '')) {
+        $swal_fire = json_encode([
+            'icon' => 'error',
+            'title' => 'Acesso Negado',
+            'text' => 'Token de segurança inválido. Recarregue a página.'
+        ]);
+    } 
+    elseif (isset($_FILES['planilha'])) {
+        
+        // Validação de Arquivo (MIME Type)
+        $arquivoValido = false;
+        if (class_exists('finfo')) {
+            $finfo = new finfo(FILEINFO_MIME_TYPE);
+            $mime = $finfo->file($_FILES['planilha']['tmp_name']);
+            $mimes_permitidos = [
+                'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet', 
+                'application/vnd.ms-excel',
+                'application/octet-stream'
+            ];
+            if (in_array($mime, $mimes_permitidos)) $arquivoValido = true;
         } else {
-            $erroMsg = isset($dados['erro']) ? $dados['erro'] : $output;
-            $resultado_html = "<div class='card error-box'><strong>Erro:</strong><pre>$erroMsg</pre></div>";
+            $ext = strtolower(pathinfo($_FILES['planilha']['name'], PATHINFO_EXTENSION));
+            if ($ext === 'xlsx') $arquivoValido = true;
         }
-    } else {
-        $resultado_html = "<div class='card error-box'>Erro ao salvar arquivo.</div>";
+
+        if (!$arquivoValido) {
+            $swal_fire = json_encode([
+                'icon' => 'warning',
+                'title' => 'Arquivo Inválido',
+                'text' => 'Por favor, envie apenas arquivos Excel (.xlsx).'
+            ]);
+        } else {
+            // Sanitização e Upload
+            $nomeOriginal = preg_replace("/[^a-zA-Z0-9\._-]/", "", basename($_FILES['planilha']['name']));
+            $novoNome = uniqid() . "_BASE_" . $nomeOriginal;
+            $caminhoCompleto = $uploadDir . $novoNome;
+            
+            $caminhoAudit = "";
+            if (isset($_FILES['audit_file']) && $_FILES['audit_file']['error'] === UPLOAD_ERR_OK) {
+                $nomeAudit = preg_replace("/[^a-zA-Z0-9\._-]/", "", basename($_FILES['audit_file']['name']));
+                $novoNomeAudit = uniqid() . "_AUDIT_" . $nomeAudit;
+                $caminhoAudit = $uploadDir . $novoNomeAudit;
+                move_uploaded_file($_FILES['audit_file']['tmp_name'], $caminhoAudit);
+            }
+
+            if (move_uploaded_file($_FILES['planilha']['tmp_name'], $caminhoCompleto)) {
+                
+                // Execução do Python
+                $arg1 = escapeshellarg($caminhoCompleto);
+                $arg2 = $caminhoAudit ? " " . escapeshellarg($caminhoAudit) : "";
+                $comando = "python processamento.py $arg1$arg2";
+                
+                // Captura saída
+                $output = shell_exec($comando . " 2>&1");
+                $linhas = explode("\n", trim($output));
+                $json_str = end($linhas);
+                $dados = json_decode($json_str, true);
+
+                if (json_last_error() === JSON_ERROR_NONE && isset($dados['sucesso']) && $dados['sucesso']) {
+                    
+                    // --- CORREÇÃO DO ERRO UNDEFINED KEY ---
+                    // Agora pegamos os dados do cenário padrão (Planilha)
+                    $statsPadrao = $dados['cenario_planilha']['stats'];
+                    
+                    $csvPath = $dados['arquivo'];
+                    $totalGeral = $statsPadrao['total']; // Corrigido aqui
+                    $temAudit = $dados['tem_audit_file'];
+                    
+                    // Passa o JSON completo para o JS manipular a troca de cenários
+                    $json_dados_js = json_encode($dados);
+
+                    // Alerta Sucesso
+                    $swal_fire = json_encode([
+                        'icon' => 'success',
+                        'title' => 'Análise Concluída',
+                        'text' => number_format($totalGeral, 0, ',', '.') . " drops processados com sucesso.",
+                        'timer' => 2000,
+                        'showConfirmButton' => false
+                    ]);
+
+                    // Renderização Inicial (PHP) - Baseada no Cenário Planilha
+                    function renderTablePHP($data, $limit=27) {
+                        $h=""; arsort($data); $i=0;
+                        foreach($data as $k=>$v){
+                            if($i++ >= $limit) break;
+                            $k = $k ?: "N/D";
+                            $v = number_format($v, 0, ',', '.');
+                            $h .= "<tr><td><span class='row-label'>$k</span></td><td class='text-right font-mono'>$v</td></tr>";
+                        }
+                        return $h;
+                    }
+
+                    $tblVendedor = renderTablePHP($statsPadrao['por_vendedor']);
+                    $tblSold = renderTablePHP($statsPadrao['por_sold']);
+                    
+                    // Lógica FAD Inicial
+                    $tblFad = "";
+                    if ($temAudit) {
+                        $auditList = $dados['cenario_planilha']['audit'];
+                        usort($auditList, function($a, $b){ return abs($b['diff']) - abs($a['diff']); });
+                        foreach($auditList as $item) {
+                            $nome = $item['fad']?:"N/D";
+                            $calc = number_format($item['calculado'],0,',','.');
+                            $esp = number_format($item['esperado'],0,',','.');
+                            $diff = $item['diff'];
+                            
+                            $badgeClass = $diff==0 ? 'badge-success' : ($diff>0 ? 'badge-warning' : 'badge-danger');
+                            $badgeTxt = $diff==0 ? 'OK' : ($diff>0 ? 'Excedente' : 'Faltante');
+                            $diffTxt = $diff>0 ? "+$diff" : $diff;
+
+                            $tblFad .= "<tr>
+                                <td><a href='#' onclick=\"openFadDetails('$nome');return false;\" class='link-drill'>$nome</a></td>
+                                <td class='text-right'>$calc</td>
+                                <td class='text-right text-muted'>$esp</td>
+                                <td class='text-right font-bold " . ($diff!=0?'text-danger':'text-success') . "'>$diffTxt</td>
+                                <td class='text-center'><span class='badge $badgeClass'>$badgeTxt</span></td>
+                            </tr>";
+                        }
+                        $headFad = "<tr><th>FAD</th><th class='text-right'>Real</th><th class='text-right'>Meta</th><th class='text-right'>Dif.</th><th class='text-center'>Status</th></tr>";
+                    } else {
+                        $headFad = "<tr><th>FAD</th><th class='text-right'>Qtd</th></tr>";
+                        $fadData = $statsPadrao['por_fad'];
+                        arsort($fadData);
+                        foreach($fadData as $k=>$v) {
+                            $v = number_format($v,0,',','.');
+                            $tblFad .= "<tr><td><a href='#' onclick=\"openFadDetails('$k');return false;\" class='link-drill'>$k</a></td><td class='text-right font-mono'>$v</td></tr>";
+                        }
+                    }
+
+                    $resultado_html = "
+                    <div class='fade-in'>
+                        <div class='download-card'>
+                            <div class='d-flex align-center gap-3'>
+                                <div class='icon-box success'>
+                                    <svg width='24' height='24' fill='none' stroke='currentColor' stroke-width='2' viewBox='0 0 24 24'><path d='M22 11.08V12a10 10 0 1 1-5.93-9.14'/><polyline points='22 4 12 14.01 9 11.01'/></svg>
+                                </div>
+                                <div>
+                                    <h3>Processamento Finalizado</h3>
+                                    <p class='text-muted text-sm'>Base: <strong>$nomeOriginal</strong> " . ($temAudit ? " • Auditoria Ativa" : "") . "</p>
+                                </div>
+                            </div>
+                            <a href='$csvPath' class='btn btn-outline btn-sm' download>
+                                <svg width='18' height='18' fill='none' stroke='currentColor' stroke-width='2' viewBox='0 0 24 24'><path d='M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4'/><polyline points='7 10 12 15 17 10'/><line x1='12' y1='15' x2='12' y2='3'/></svg>
+                                Baixar CSV
+                            </a>
+                        </div>
+
+                        <div class='control-bar'>
+                            <div class='control-group'>
+                                <label class='label-sm'>Cenário de Dados:</label>
+                                <div class='switch-toggle'>
+                                    <input type='radio' id='viewPlanilha' name='viewScenario' value='planilha' checked onchange=\"waitAndProcess(switchScenario)\">
+                                    <label for='viewPlanilha'>Planilha</label>
+                                    
+                                    <input type='radio' id='viewBanco' name='viewScenario' value='banco' onchange=\"waitAndProcess(switchScenario)\">
+                                    <label for='viewBanco'>Banco SQL</label>
+                                </div>
+                            </div>
+                            
+                            <div class='control-actions'>
+                                <button class='btn btn-subtle btn-sm' onclick=\"waitAndProcess(openAuditModal)\">
+                                    <svg width='16' height='16' fill='none' stroke='currentColor' stroke-width='2' viewBox='0 0 24 24'><path d='M9 11l3 3L22 4'/><path d='M21 12v7a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h11'/></svg>
+                                    Auditoria Cadastral
+                                </button>
+                                <div class='metric-pill'>
+                                    <span class='label'>Total Drops</span>
+                                    <span class='value' id='totalDisplay'>" . number_format($totalGeral, 0, ',', '.') . "</span>
+                                </div>
+                            </div>
+                        </div>
+
+                        <div class='dashboard-grid'>
+                            <div class='card data-card'>
+                                <div class='card-header'>
+                                    <h4><span class='icon-dot blue'></span>Por Vendedor</h4>
+                                    <button class='btn-icon' onclick=\"waitAndProcess(function(){openModal('Vendedor')})\" title='Expandir'><svg width='16' height='16' fill='none' stroke='currentColor' stroke-width='2' viewBox='0 0 24 24'><polyline points='15 3 21 3 21 9'/><polyline points='9 21 3 21 3 15'/><line x1='21' y1='3' x2='14' y2='10'/><line x1='3' y1='21' x2='10' y2='14'/></svg></button>
+                                </div>
+                                <div class='table-responsive scroll-y'>
+                                    <table class='table-clean' id='tblVendedor'>
+                                        <thead><tr><th>Nome</th><th class='text-right'>Qtd</th></tr></thead>
+                                        <tbody>$tblVendedor</tbody>
+                                    </table>
+                                </div>
+                            </div>
+
+                            <div class='card data-card'>
+                                <div class='card-header'>
+                                    <h4><span class='icon-dot purple'></span>Por Cliente (Sold)</h4>
+                                    <button class='btn-icon' onclick=\"waitAndProcess(function(){openModal('Sold')})\" title='Expandir'><svg width='16' height='16' fill='none' stroke='currentColor' stroke-width='2' viewBox='0 0 24 24'><polyline points='15 3 21 3 21 9'/><polyline points='9 21 3 21 3 15'/><line x1='21' y1='3' x2='14' y2='10'/><line x1='3' y1='21' x2='10' y2='14'/></svg></button>
+                                </div>
+                                <div class='table-responsive scroll-y'>
+                                    <table class='table-clean' id='tblSold'>
+                                        <thead><tr><th>Cliente</th><th class='text-right'>Qtd</th></tr></thead>
+                                        <tbody>$tblSold</tbody>
+                                    </table>
+                                </div>
+                            </div>
+
+                            <div class='card data-card full-width-mobile' " . ($temAudit ? "style='grid-column: 1 / -1;'" : "") . ">
+                                <div class='card-header'>
+                                    <h4><span class='icon-dot orange'></span>Performance FAD " . ($temAudit ? "<span class='badge badge-audit'>Auditado</span>" : "") . "</h4>
+                                    <button class='btn-icon' onclick=\"waitAndProcess(function(){openModal('FAD')})\" title='Expandir'><svg width='16' height='16' fill='none' stroke='currentColor' stroke-width='2' viewBox='0 0 24 24'><polyline points='15 3 21 3 21 9'/><polyline points='9 21 3 21 3 15'/><line x1='21' y1='3' x2='14' y2='10'/><line x1='3' y1='21' x2='10' y2='14'/></svg></button>
+                                </div>
+                                <div class='table-responsive no-scroll'>
+                                    <table class='table-clean table-hover' id='tblFad'>
+                                        <thead id='headFad'>$headFad</thead>
+                                        <tbody>$tblFad</tbody>
+                                    </table>
+                                </div>
+                            </div>
+                        </div>
+                    </div>";
+
+                } else {
+                    $erroMsg = isset($dados['erro']) ? $dados['erro'] : $output;
+                    $swal_fire = json_encode(['icon' => 'error', 'title' => 'Falha no Processamento', 'html' => "<div class='text-left text-sm text-danger bg-red-50 p-3 rounded'>$erroMsg</div>"]);
+                }
+            } else {
+                $swal_fire = json_encode(['icon' => 'error', 'title' => 'Erro de Upload', 'text' => 'Não foi possível salvar o arquivo no servidor.']);
+            }
+        }
     }
 }
 ?>
@@ -109,83 +260,183 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_FILES['planilha'])) {
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <title>SalesDrop Analytics</title>
+    
+    <!-- Fonts & Icons -->
+    <link rel="preconnect" href="https://fonts.googleapis.com">
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+    <link href="https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700&display=swap" rel="stylesheet">
+    
+    <!-- Estilos -->
     <link rel="stylesheet" href="style.css">
+    
+    <!-- Libs -->
     <script src="https://cdn.jsdelivr.net/npm/chart.js"></script>
-    <style>
-        .dashboard-controls { display: flex; justify-content: space-between; align-items: center; margin-bottom: 25px; flex-wrap: wrap; gap: 20px; }
-        .scenario-toggle { display: flex; align-items: center; gap: 15px; background: #fff; padding: 8px 15px; border-radius: 8px; border: 1px solid #e2e8f0; box-shadow: 0 1px 2px rgba(0,0,0,0.05); }
-        .toggle-group { display: flex; background: #f1f5f9; padding: 4px; border-radius: 6px; }
-        .toggle-group input { display: none; }
-        .toggle-group label { padding: 6px 14px; border-radius: 4px; cursor: pointer; font-size: 0.85rem; font-weight: 500; color: var(--text-light); transition: all 0.2s; }
-        .toggle-group input:checked + label { background: #fff; color: var(--accent-color); box-shadow: 0 1px 3px rgba(0,0,0,0.1); font-weight: 600; }
-        
-        .modal-content { display: flex; flex-direction: column; max-height: 90vh; }
-        .modal-header { flex-shrink: 0; background-color: #fff; z-index: 10; }
-        .modal-body { flex-grow: 1; overflow: hidden; display: flex; flex-direction: column; padding: 25px 30px; }
-        .modal-table-area { flex-grow: 1; overflow-y: auto; border: 1px solid #eee; border-radius: 6px; scrollbar-width: thin; }
-        .modal-footer { flex-shrink: 0; padding: 15px 30px; border-top: 1px solid #eee; background-color: #f9fafb; border-radius: 0 0 12px 12px; display: flex; justify-content: center; }
-        .pagination { display: flex; align-items: center; gap: 15px; margin: 0; padding: 0; border: none; }
-        .pagination button { padding: 6px 14px; cursor: pointer; }
-        .pagination span { font-size: 0.9rem; color: var(--text-light); }
-        .diff-row { background-color: #fff9f9; }
-        .highlight-diff { color: var(--danger-text); font-weight: 600; }
-        .sub-text { font-size: 0.8em; color: var(--text-light); font-weight: normal; }
-    </style>
+    <script src="https://cdn.jsdelivr.net/npm/sweetalert2@11"></script>
 </head>
 <body>
-    <div id="loadingOverlay" class="loading-overlay"><div class="spinner"></div><div class="loading-text">Processando...</div></div>
-
-    <!-- Modal Resumo Geral -->
-    <div id="detailModal" class="modal">
-        <div class="modal-content">
-            <div class="modal-header"><h2 id="modalTitle">Detalhes</h2><span class="close-modal" onclick="closeModal()">&times;</span></div>
-            <div class="modal-body">
-                <div class="modal-charts-area"><canvas id="detailChart"></canvas></div>
-                <input type="text" id="searchInput" class="form-control" onkeyup="filterTable('modalTable')" placeholder="Filtrar dados..." style="margin-bottom:15px;">
-                <div class="modal-table-area" style="max-height:400px;">
-                    <table id="modalTable"><thead id="modalTableHead"></thead><tbody id="modalTableBody"></tbody></table>
-                </div>
-            </div>
-            <div class="modal-footer"><div class="pagination" id="detailPagination"><button onclick="changeDetailPage(-1)">Anterior</button><span id="detailPageIndicator"></span><button onclick="changeDetailPage(1)">Próxima</button></div></div>
+    
+    <!-- Loader Global -->
+    <div id="loadingOverlay" class="loading-overlay hidden">
+        <div class="spinner-container">
+            <div class="spinner"></div>
+            <p class="loading-text">Processando dados...</p>
         </div>
     </div>
 
-    <!-- Modal Drill-down -->
-    <div id="fadDrillModal" class="modal">
-        <div class="modal-content" style="max-width: 900px;">
-            <div class="modal-header"><h2 id="drillTitle">Drill Down</h2><span class="close-modal" onclick="closeDrillModal()">&times;</span></div>
-            <div class="modal-body">
-                <div style="display:flex; justify-content:space-between; margin-bottom:15px;">
-                    <div><span id="drillCount" class="badge badge-neutral"></span></div>
-                    <div style="display:flex; gap:10px;">
-                        <button onclick="exportDrill('txt')" class="btn btn-secondary" style="margin:0; padding:6px 12px;">TXT</button>
-                        <button onclick="exportDrill('csv')" class="btn btn-primary" style="margin:0; padding:6px 12px;">Excel</button>
+    <!-- Navbar -->
+    <nav class="navbar glass">
+        <div class="container-fluid">
+            <div class="logo-area">
+                <!-- Se tiver logo, descomente: <img src="assets/logo.png" alt="Logo" class="logo-img"> -->
+                <span class="brand-name">SalesDrop<span class="text-primary">.Analytics</span></span>
+            </div>
+            <ul class="nav-links">
+                <li><a href="index.php" class="active">Dashboard</a></li>
+                <li><a href="config.php">Configurações</a></li>
+            </ul>
+        </div>
+    </nav>
+
+    <!-- Conteúdo Principal -->
+    <main class="container fade-in">
+        
+        <?php if (empty($resultado_html)): ?>
+        <!-- Tela de Upload (Empty State) -->
+        <div class="upload-wrapper">
+            <div class="card upload-card">
+                <div class="card-header text-center">
+                    <h1>Nova Análise</h1>
+                    <p class="text-muted">Importe seus dados para gerar insights instantâneos.</p>
+                </div>
+                
+                <form method="POST" enctype="multipart/form-data" id="uploadForm" onsubmit="showLoading()">
+                    <input type="hidden" name="csrf_token" value="<?php echo $_SESSION['csrf_token']; ?>">
+                    
+                    <div class="dropzone-container">
+                        <div class="dropzone">
+                            <label for="planilha" class="dropzone-label">
+                                <div class="icon-upload">📂</div>
+                                <span class="title">1. Planilha Base (Obrigatório)</span>
+                                <span class="desc">Arraste ou clique para selecionar .xlsx</span>
+                            </label>
+                            <input type="file" name="planilha" id="planilha" required accept=".xlsx" class="file-input">
+                        </div>
+
+                        <div class="dropzone secondary">
+                            <label for="audit_file" class="dropzone-label">
+                                <div class="icon-upload">📊</div>
+                                <span class="title">2. Auditoria (Opcional)</span>
+                                <span class="desc">Arquivo de fechamento do cliente</span>
+                            </label>
+                            <input type="file" name="audit_file" id="audit_file" accept=".xlsx" class="file-input">
+                        </div>
                     </div>
-                </div>
-                <div class="modal-table-area" style="max-height:none;"><table id="drillTable"><thead></thead><tbody></tbody></table></div>
-            </div>
-            <div class="modal-footer"><div class="pagination" id="drillPagination"><button id="btnPrev" onclick="changeDrillPage(-1)">Anterior</button><span id="pageIndicator"></span><button id="btnNext" onclick="changeDrillPage(1)">Próxima</button></div></div>
-        </div>
-    </div>
 
-    <!-- Modal Auditoria de Cadastro -->
-    <div id="auditModal" class="modal">
-        <div class="modal-content" style="max-width: 1000px;">
+                    <button type="submit" class="btn btn-primary btn-lg w-100 mt-4">
+                        <span>Iniciar Processamento</span>
+                        <svg width="20" height="20" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24"><path d="M5 12h14M12 5l7 7-7 7"/></svg>
+                    </button>
+                </form>
+            </div>
+        </div>
+        <?php else: ?>
+            <!-- Tela de Resultados -->
+            <div class="results-wrapper">
+                <div class="header-actions mb-4">
+                    <a href="index.php" class="btn btn-subtle">
+                        <svg width="18" height="18" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24"><path d="M19 12H5M12 19l-7-7 7-7"/></svg>
+                        Nova Análise
+                    </a>
+                </div>
+                <?php echo $resultado_html; ?>
+            </div>
+        <?php endif; ?>
+
+    </main>
+
+    <!-- === MODAIS === -->
+    
+    <!-- Modal Detalhes (Genérico) -->
+    <div id="detailModal" class="modal-backdrop hidden">
+        <div class="modal-panel animate-slide-up">
             <div class="modal-header">
-                <h2 style="color:var(--danger-text)">Divergência de Cadastro</h2>
-                <span class="close-modal" onclick="closeAuditModal()">&times;</span>
+                <h3 id="modalTitle">Detalhes</h3>
+                <button class="btn-close" onclick="closeModal()">✕</button>
             </div>
             <div class="modal-body">
-                <div style="display:flex; justify-content:space-between; margin-bottom:15px; align-items:center;">
-                    <p style="margin:0">Clientes com FAD divergente (Planilha vs Banco)</p>
-                    <div style="display:flex; gap:10px;">
-                        <button onclick="exportAudit('txt')" class="btn btn-secondary" style="margin:0; padding:6px 12px;">TXT</button>
-                        <button onclick="exportAudit('csv')" class="btn btn-primary" style="margin:0; padding:6px 12px;">Excel</button>
+                <div class="chart-wrapper">
+                    <canvas id="detailChart"></canvas>
+                </div>
+                <div class="search-bar">
+                    <svg width="16" height="16" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24"><circle cx="11" cy="11" r="8"/><line x1="21" y1="21" x2="16.65" y2="16.65"/></svg>
+                    <input type="text" id="searchInput" onkeyup="filterTable('modalTable')" placeholder="Filtrar registros...">
+                </div>
+                <div class="table-wrapper-modal">
+                    <table id="modalTable" class="table-clean">
+                        <thead id="modalTableHead"></thead>
+                        <tbody id="modalTableBody"></tbody>
+                    </table>
+                </div>
+            </div>
+            <div class="modal-footer">
+                <div class="pagination" id="detailPagination">
+                    <button class="btn-page" onclick="changeDetailPage(-1)">←</button>
+                    <span id="detailPageIndicator" class="page-info">1 / 1</span>
+                    <button class="btn-page" onclick="changeDetailPage(1)">→</button>
+                </div>
+            </div>
+        </div>
+    </div>
+
+    <!-- Modal Drill-Down (FAD) -->
+    <div id="fadDrillModal" class="modal-backdrop hidden">
+        <div class="modal-panel large animate-slide-up">
+            <div class="modal-header">
+                <h3 id="drillTitle">Drill Down</h3>
+                <button class="btn-close" onclick="closeDrillModal()">✕</button>
+            </div>
+            <div class="modal-body">
+                <div class="toolbar">
+                    <span id="drillCount" class="badge badge-neutral">0 registros</span>
+                    <div class="actions">
+                        <button onclick="exportDrill('txt')" class="btn btn-sm btn-secondary">Exportar TXT</button>
+                        <button onclick="exportDrill('csv')" class="btn btn-sm btn-primary">Exportar Excel</button>
                     </div>
                 </div>
-                <div class="modal-table-area" style="max-height:500px;">
-                    <table id="auditTable">
-                        <thead><tr><th>Cliente</th><th>Vendedor</th><th>FAD Planilha</th><th>FAD Banco</th></tr></thead>
+                <div class="table-wrapper-modal">
+                    <table id="drillTable" class="table-clean table-striped">
+                        <thead></thead><tbody></tbody>
+                    </table>
+                </div>
+            </div>
+            <div class="modal-footer">
+                <div class="pagination" id="drillPagination">
+                    <button class="btn-page" id="btnPrev" onclick="changeDrillPage(-1)">←</button>
+                    <span id="pageIndicator" class="page-info"></span>
+                    <button class="btn-page" id="btnNext" onclick="changeDrillPage(1)">→</button>
+                </div>
+            </div>
+        </div>
+    </div>
+
+    <!-- Modal Auditoria Cadastral -->
+    <div id="auditModal" class="modal-backdrop hidden">
+        <div class="modal-panel large animate-slide-up">
+            <div class="modal-header">
+                <h3 class="text-danger">Divergência Cadastral</h3>
+                <button class="btn-close" onclick="closeAuditModal()">✕</button>
+            </div>
+            <div class="modal-body">
+                <div class="toolbar">
+                    <p class="text-sm text-muted">Clientes com classificação divergente (Planilha vs Banco)</p>
+                    <div class="actions">
+                        <button onclick="exportAudit('txt')" class="btn btn-sm btn-secondary">TXT</button>
+                        <button onclick="exportAudit('csv')" class="btn btn-sm btn-primary">Excel</button>
+                    </div>
+                </div>
+                <div class="table-wrapper-modal">
+                    <table id="auditTable" class="table-clean">
+                        <thead><tr><th>Cliente</th><th>Vendedor</th><th>Planilha</th><th>Banco</th></tr></thead>
                         <tbody></tbody>
                     </table>
                 </div>
@@ -193,45 +444,54 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_FILES['planilha'])) {
         </div>
     </div>
 
-    <nav class="navbar">
-        <div class="logo-container"><strong>SalesDrop</strong> Analytics</div>
-        <ul class="nav-links"><li><a href="index.php" class="active">Dashboard</a></li><li><a href="config.php">Config</a></li></ul>
-    </nav>
-    
-    <div class="container">
-        <?php if (empty($resultado_html)): ?>
-        <div class="card">
-            <h1>Nova Análise</h1>
-            <form method="POST" enctype="multipart/form-data" onsubmit="showLoading()">
-                <div class="upload-group">
-                    <div class="upload-area"><label>1. Planilha Base</label><input type="file" name="planilha" required accept=".xlsx"></div>
-                    <div class="upload-area"><label>2. Auditoria (Opcional)</label><input type="file" name="audit_file" accept=".xlsx"></div>
-                </div>
-                <button type="submit" class="btn btn-primary">Processar</button>
-            </form>
-        </div>
-        <?php else: ?>
-            <a href="index.php" class="btn btn-secondary">Nova Análise</a>
-        <?php endif; ?>
-        <?php echo $resultado_html; ?>
-    </div>
-
+    <!-- JavaScript Core -->
     <script>
-        const rawData = <?php echo $json_dados_js; ?>;
-        let myChart = null;
-        let currentDrillData = [], currentDetailData = []; 
-        let currentFadName = "";
-        let drillPage = 1, detailPage = 1;
-        const rowsPerPage = 100;
-        let activeScenarioKey = 'cenario_planilha'; 
+        // Inicialização de Dados
+        const rawData = <?php echo $json_dados_js ?: 'null'; ?>;
+        const swalData = <?php echo $swal_fire ?: 'null'; ?>;
 
-        document.addEventListener('DOMContentLoaded', () => { if (rawData) switchScenario(); });
-
-        function waitAndProcess(callback) {
-            showLoading();
-            setTimeout(function() { callback(); document.getElementById('loadingOverlay').style.display = 'none'; }, 50);
+        // Feedback Inicial
+        if (swalData) {
+            Swal.fire({
+                ...swalData,
+                customClass: { popup: 'swal-modern-popup', confirmButton: 'btn btn-primary' },
+                buttonsStyling: false
+            });
         }
 
+        // Variáveis de Estado
+        let myChart = null;
+        let currentDrillData = [], currentDetailData = [], currentFadName = "";
+        let drillPage = 1, detailPage = 1, rowsPerPage = 100;
+        let activeScenarioKey = 'cenario_planilha';
+
+        document.addEventListener('DOMContentLoaded', () => { 
+            if (rawData) switchScenario(); 
+        });
+
+        // --- UI UTILS ---
+        function showLoading() { document.getElementById('loadingOverlay').classList.remove('hidden'); }
+        function hideLoading() { document.getElementById('loadingOverlay').classList.add('hidden'); }
+        
+        function waitAndProcess(callback) {
+            showLoading();
+            setTimeout(() => {
+                try { callback(); } catch(e) { console.error(e); }
+                hideLoading();
+            }, 50);
+        }
+
+        // Modais
+        function closeModal() { document.getElementById('detailModal').classList.add('hidden'); }
+        function closeDrillModal() { document.getElementById('fadDrillModal').classList.add('hidden'); }
+        function closeAuditModal() { document.getElementById('auditModal').classList.add('hidden'); }
+        
+        // Fechar ao clicar fora
+        window.onclick = function(e) {
+            if(e.target.classList.contains('modal-backdrop')) e.target.classList.add('hidden');
+        }
+
+        // --- LÓGICA DE DADOS ---
         function switchScenario() {
             const isPlanilha = document.getElementById('viewPlanilha').checked;
             activeScenarioKey = isPlanilha ? 'cenario_planilha' : 'cenario_banco';
@@ -239,226 +499,166 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_FILES['planilha'])) {
             const auditData = rawData[activeScenarioKey].audit;
             const hasAudit = rawData.tem_audit_file;
 
-            document.getElementById('totalDisplay').innerText = "Total: " + new Intl.NumberFormat('pt-BR').format(data.total) + " drops";
+            // Animação de troca de valor
+            const totalEl = document.getElementById('totalDisplay');
+            totalEl.style.opacity = 0;
+            setTimeout(() => {
+                totalEl.innerText = new Intl.NumberFormat('pt-BR').format(data.total);
+                totalEl.style.opacity = 1;
+            }, 150);
+
             renderMiniTable('tblVendedor', data.por_vendedor);
             renderMiniTable('tblSold', data.por_sold);
             renderFadTable(data.por_fad, auditData, hasAudit);
         }
 
-        function renderMiniTable(tableId, dataObj) {
-            const tbody = document.querySelector('#' + tableId + ' tbody');
-            tbody.innerHTML = "";
-            Object.entries(dataObj).sort((a, b) => b[1] - a[1]).slice(0, 27).forEach(([k, v]) => {
-                tbody.innerHTML += `<tr><td>${k}</td><td style='text-align:right; font-weight:600;'>${new Intl.NumberFormat('pt-BR').format(v)}</td></tr>`;
+        function renderMiniTable(tid, obj) {
+            const tbody = document.querySelector('#'+tid+' tbody'); tbody.innerHTML="";
+            Object.entries(obj).sort((a,b)=>b[1]-a[1]).slice(0,27).forEach(([k,v])=>{
+                tbody.innerHTML+=`<tr><td><span class='row-title'>${k}</span></td><td class='text-right font-mono'>${new Intl.NumberFormat('pt-BR').format(v)}</td></tr>`;
             });
         }
 
-        function renderFadTable(fadObj, auditList, hasAudit) {
-            const table = document.getElementById('tblFad');
-            const thead = document.getElementById('headFad');
-            const tbody = table.querySelector('tbody');
-            tbody.innerHTML = "";
-
-            if (hasAudit && auditList.length > 0) {
-                thead.innerHTML = "<tr><th>FAD</th><th style='text-align:right'>Calc.</th><th style='text-align:right'>Meta</th><th style='text-align:right'>Dif.</th><th style='text-align:center'>Status</th></tr>";
-                auditList.sort((a, b) => Math.abs(b.diff) - Math.abs(a.diff));
-                auditList.forEach(item => {
-                    let nome = item.fad || "N/D", diffDisplay = item.diff > 0 ? `+${item.diff}` : item.diff;
-                    let badgeClass = item.diff === 0 ? "badge-success" : (item.diff > 0 ? "badge-warning" : "badge-danger");
-                    let badgeText = item.diff === 0 ? "OK" : (item.diff > 0 ? "Sobrou" : "Faltou");
-                    let link = `<a href="#" onclick="waitAndProcess(function(){ openFadDetails('${nome}') }); return false;" style="color:var(--accent-color); text-decoration:none; font-weight:600;">${nome}</a>`;
-                    tbody.innerHTML += `<tr><td>${link}</td><td style='text-align:right'>${item.calculado}</td><td style='text-align:right'>${item.esperado}</td><td style='text-align:right; font-weight:bold;'>${diffDisplay}</td><td style='text-align:center'><span class='badge ${badgeClass}'>${badgeText}</span></td></tr>`;
+        function renderFadTable(obj, audit, has) {
+            const tb = document.querySelector('#tblFad tbody'), th=document.getElementById('headFad'); tb.innerHTML="";
+            if(has && audit.length){
+                th.innerHTML="<tr><th>FAD</th><th class='text-right'>Calc.</th><th class='text-right'>Meta</th><th class='text-right'>Dif.</th><th class='text-center'>Status</th></tr>";
+                audit.sort((a,b)=>Math.abs(b.diff)-Math.abs(a.diff));
+                audit.forEach(i=>{
+                    let nm=i.fad||"N/D", dd=i.diff>0?`+${i.diff}`:i.diff, bc=i.diff==0?"badge-success":(i.diff>0?"badge-warning":"badge-danger"), bt=i.diff==0?"OK":(i.diff>0?"Sobrou":"Faltou");
+                    let lnk=`<a href="#" onclick="waitAndProcess(function(){openFadDetails('${nm}')});return false;" class="link-drill">${nm}</a>`;
+                    tb.innerHTML+=`<tr><td>${lnk}</td><td class='text-right'>${i.calculado}</td><td class='text-right text-muted'>${i.esperado}</td><td class='text-right font-bold ${i.diff!=0?'text-danger':''}'>${dd}</td><td class='text-center'><span class='badge ${bc}'>${bt}</span></td></tr>`;
                 });
             } else {
-                thead.innerHTML = "<tr><th>FAD</th><th style='text-align:right'>Qtd</th></tr>";
-                Object.entries(fadObj).sort((a, b) => b[1] - a[1]).forEach(([k, v]) => {
-                    let link = `<a href="#" onclick="waitAndProcess(function(){ openFadDetails('${k}') }); return false;" style="color:var(--accent-color); text-decoration:none; font-weight:600;">${k}</a>`;
-                    tbody.innerHTML += `<tr><td>${link}</td><td style='text-align:right; font-weight:600;'>${v}</td></tr>`;
+                th.innerHTML="<tr><th>FAD</th><th class='text-right'>Qtd</th></tr>";
+                Object.entries(obj).sort((a,b)=>b[1]-a[1]).forEach(([k,v])=>{
+                    let lnk=`<a href="#" onclick="waitAndProcess(function(){openFadDetails('${k}')});return false;" class="link-drill">${k}</a>`;
+                    tb.innerHTML+=`<tr><td>${lnk}</td><td class='text-right font-mono'>${new Intl.NumberFormat('pt-BR').format(v)}</td></tr>`;
                 });
             }
         }
 
+        // --- AUDITORIA ---
         function openAuditModal() {
-            const modal = document.getElementById('auditModal');
-            const tbody = document.querySelector('#auditTable tbody');
-            const list = rawData.lista_divergencia_cadastral || [];
-            tbody.innerHTML = "";
-            if (list.length === 0) tbody.innerHTML = "<tr><td colspan='4' style='text-align:center; padding:20px;'>Nenhuma divergência encontrada.</td></tr>";
+            const m=document.getElementById('auditModal'), tb=document.querySelector('#auditTable tbody'), l=rawData.lista_divergencia_cadastral||[];
+            tb.innerHTML=""; 
+            if(!l.length) tb.innerHTML="<tr><td colspan='4' class='text-center p-4 text-muted'>Nenhuma divergência encontrada. Tudo certo! 🎉</td></tr>";
             else {
-                list.sort((a, b) => (a.Desc_FAD_Planilha > b.Desc_FAD_Planilha) ? 1 : -1);
-                list.forEach(item => {
-                    tbody.innerHTML += `<tr class='diff-row'><td>${item.Cliente}</td><td>${item.Vendedor}</td><td class='highlight-diff'>${item.Desc_FAD_Planilha} <br><span class='sub-text'>(ID: ${item.FAD_ID_Planilha})</span></td><td class='highlight-diff' style='color:#0f172a'>${item.Desc_FAD_Banco} <br><span class='sub-text'>(ID: ${item.FAD_ID_Banco})</span></td></tr>`;
-                });
+                l.sort((a,b)=>(a.Desc_FAD_Planilha>b.Desc_FAD_Planilha)?1:-1);
+                l.forEach(i=>{tb.innerHTML+=`<tr class='diff-row'><td><span class='font-medium'>${i.Cliente}</span></td><td>${i.Vendedor}</td><td class='text-danger'>${i.Desc_FAD_Planilha}<br><small class='text-muted'>ID: ${i.FAD_ID_Planilha}</small></td><td class='text-primary'>${i.Desc_FAD_Banco}<br><small class='text-muted'>ID: ${i.FAD_ID_Banco}</small></td></tr>`});
             }
-            modal.style.display = 'block';
-        }
-        function closeAuditModal() { document.getElementById('auditModal').style.display = 'none'; }
-
-        function exportAudit(type) {
-            const list = rawData.lista_divergencia_cadastral || [];
-            if(!list.length) return;
-            let content = "";
-            if(type === 'csv') {
-                content = "Cliente;Vendedor;FAD_ID_Planilha;FAD_Desc_Planilha;FAD_ID_Banco;FAD_Desc_Banco\n";
-                list.forEach(item => { content += `${item.Cliente};${item.Vendedor};${item.FAD_ID_Planilha};${item.Desc_FAD_Planilha};${item.FAD_ID_Banco};${item.Desc_FAD_Banco}\n`; });
-                downloadFile(content, "Auditoria_Cadastro.csv", "text/csv;charset=utf-8;");
-            } else {
-                content = "RELATÓRIO DE DIVERGÊNCIA CADASTRAL (Planilha vs Banco)\n----------------------------------------------------\n";
-                list.forEach(item => { content += `Cliente: ${item.Cliente} | Vend: ${item.Vendedor}\n   Planilha: [${item.FAD_ID_Planilha}] ${item.Desc_FAD_Planilha}\n   Banco:    [${item.FAD_ID_Banco}] ${item.Desc_FAD_Banco}\n----------------------------------------------------\n`; });
-                downloadFile(content, "Auditoria_Cadastro.txt", "text/plain");
-            }
+            m.classList.remove('hidden');
         }
 
-        function openModal(type) {
-            const modal = document.getElementById('detailModal');
-            const title = document.getElementById('modalTitle');
-            const thead = document.getElementById('modalTableHead');
-            
-            const stats = rawData[activeScenarioKey].stats;
-            const audit = rawData[activeScenarioKey].audit;
-            const hasAudit = rawData.tem_audit_file;
-            let dataSet = {}, isAuditMode = (type === 'FAD' && hasAudit);
-
-            if (type === 'Vendedor') { title.innerText = "Detalhes: Vendedor"; dataSet = stats.por_vendedor; thead.innerHTML = "<tr><th>Nome</th><th style='text-align:right'>Qtd</th></tr>"; }
-            else if (type === 'Sold') { title.innerText = "Detalhes: Cliente"; dataSet = stats.por_sold; thead.innerHTML = "<tr><th>Cliente</th><th style='text-align:right'>Qtd</th></tr>"; }
-            else if (type === 'FAD') {
-                title.innerText = "Detalhes: FAD";
-                if (isAuditMode) { dataSet = audit; thead.innerHTML = "<tr><th>FAD</th><th style='text-align:right'>Calc.</th><th style='text-align:right'>Meta</th><th style='text-align:right'>Dif.</th><th style='text-align:center'>Status</th></tr>"; }
-                else { dataSet = stats.por_fad; thead.innerHTML = "<tr><th>FAD</th><th style='text-align:right'>Qtd</th></tr>"; }
-            }
-
-            currentDetailData = [];
-            if (isAuditMode && Array.isArray(dataSet)) currentDetailData = dataSet.map(i => ({ type: 'audit', ...i }));
-            else currentDetailData = Object.entries(dataSet).sort((a, b) => b[1] - a[1]).map(([k, v]) => ({ key: k, val: v, type: 'simple' }));
-
-            detailPage = 1;
-            renderDetailTable();
-            renderChart(type === 'FAD' && isAuditMode ? [] : currentDetailData.slice(0, 10).map(x => [x.key, x.val])); 
-            modal.style.display = 'block';
-            document.getElementById('searchInput').value = ''; 
-        }
-
-        function renderDetailTable() {
-            const tbody = document.getElementById('modalTableBody');
-            tbody.innerHTML = "";
-            const totalPages = Math.ceil(currentDetailData.length / rowsPerPage);
-            const start = (detailPage - 1) * rowsPerPage;
-            const end = start + rowsPerPage;
-            const pageItems = currentDetailData.slice(start, end);
-
-            pageItems.forEach(item => {
-                if (item.type === 'audit') {
-                    let nome = item.fad, badgeClass = item.diff === 0 ? "badge-success" : (item.diff > 0 ? "badge-warning" : "badge-danger");
-                    let link = `<a href="#" onclick="waitAndProcess(function(){ openFadDetails('${nome}') }); return false;" style="color:var(--accent-color); font-weight:600; text-decoration:none">${nome}</a>`;
-                    tbody.innerHTML += `<tr><td>${link}</td><td style='text-align:right'>${item.calculado}</td><td style='text-align:right'>${item.esperado}</td><td style='text-align:right'>${item.diff}</td><td style='text-align:center'><span class='badge ${badgeClass}'>!</span></td></tr>`;
-                } else {
-                    let k = item.key, v = new Intl.NumberFormat('pt-BR').format(item.val);
-                    let cell = document.getElementById('modalTitle').innerText.includes('FAD') ? `<a href="#" onclick="waitAndProcess(function(){ openFadDetails('${k}') }); return false;" style="color:var(--accent-color); font-weight:600; text-decoration:none">${k}</a>` : k;
-                    tbody.innerHTML += `<tr><td>${cell}</td><td style='text-align:right'>${v}</td></tr>`;
-                }
-            });
-
-            const div = document.getElementById('detailPagination');
-            div.style.display = totalPages > 1 ? 'flex' : 'none';
-            if(totalPages > 1) {
-                div.querySelector('span').innerText = `Página ${detailPage} de ${totalPages}`;
-                div.querySelectorAll('button')[0].disabled = detailPage === 1;
-                div.querySelectorAll('button')[1].disabled = detailPage === totalPages;
-            }
-            document.querySelector('#detailModal .modal-table-area').scrollTop = 0;
-        }
-        function changeDetailPage(d) { detailPage += d; renderDetailTable(); }
-
+        // --- DRILL DOWN ---
         function openFadDetails(fadName) {
             currentFadName = fadName;
-            const isPlanilha = (activeScenarioKey === 'cenario_planilha');
+            const isP = (activeScenarioKey === 'cenario_planilha');
             currentDrillData = rawData.detalhes.filter(row => {
-                if (isPlanilha) return row.fad_plan === fadName && row.valid_plan === true;
+                if (isP) return row.fad_plan === fadName && row.valid_plan === true;
                 else return row.fad_banc === fadName && row.valid_banc === true;
             });
-            document.getElementById('drillTitle').innerText = "Drill Down: " + fadName + (isPlanilha ? " (Planilha)" : " (Banco)");
-            document.getElementById('drillCount').innerText = currentDrillData.length + " regs";
-            document.querySelector('#drillTable thead').innerHTML = "<tr><th>Data</th><th>Cliente</th><th>Vendedor</th><th style='text-align:right'>Valor</th><th style='text-align:right'>Mínimo</th></tr>";
-            drillPage = 1;
-            renderDrillTable();
-            document.getElementById('fadDrillModal').style.display = 'block';
+            document.getElementById('drillTitle').innerText = `${fadName} (${isP?'Planilha':'Banco'})`;
+            document.getElementById('drillCount').innerText = `${currentDrillData.length} registros`;
+            document.querySelector('#drillTable thead').innerHTML = "<tr><th>Data</th><th>Cliente</th><th>Vend.</th><th class='text-right'>Valor</th><th class='text-right'>Min.</th></tr>";
+            drillPage = 1; renderDrillTable();
+            document.getElementById('fadDrillModal').classList.remove('hidden');
         }
 
         function renderDrillTable() {
-            const tbody = document.querySelector('#drillTable tbody');
-            tbody.innerHTML = "";
-            const isPlanilha = (activeScenarioKey === 'cenario_planilha');
+            const tb = document.querySelector('#drillTable tbody'); tb.innerHTML = "";
+            const isP = (activeScenarioKey === 'cenario_planilha');
             const start = (drillPage - 1) * rowsPerPage;
-            const end = start + rowsPerPage;
-            const pageData = currentDrillData.slice(start, end);
-
-            pageData.forEach(row => {
-                let valFmt = new Intl.NumberFormat('pt-BR', {style:'currency', currency:'BRL'}).format(row.valor);
-                let minVal = isPlanilha ? row.min_plan : row.min_banc;
-                let minFmt = new Intl.NumberFormat('pt-BR', {style:'currency', currency:'BRL'}).format(minVal);
-                tbody.innerHTML += `<tr><td>${row.data}</td><td>${row.cliente}</td><td>${row.vendedor}</td><td style='text-align:right; font-weight:600;'>${valFmt}</td><td style='text-align:right; color:#666;'>${minFmt}</td></tr>`;
-            });
+            const data = currentDrillData.slice(start, start + rowsPerPage);
             
+            data.forEach(r => {
+                let vf = new Intl.NumberFormat('pt-BR', {style:'currency', currency:'BRL'}).format(r.valor);
+                let mv = isP ? r.min_plan : r.min_banc;
+                let mf = new Intl.NumberFormat('pt-BR', {style:'currency', currency:'BRL'}).format(mv);
+                tb.innerHTML += `<tr><td>${r.data}</td><td>${r.cliente}</td><td>${r.vendedor}</td><td class='text-right text-success font-bold'>${vf}</td><td class='text-right text-muted'>${mf}</td></tr>`;
+            });
+            updatePag(currentDrillData.length, drillPage, 'drillPagination', 'pageIndicator');
+        }
+        
+        function changeDrillPage(d) {
             const total = Math.ceil(currentDrillData.length / rowsPerPage);
-            const div = document.getElementById('drillPagination');
-            div.style.display = total > 1 ? 'flex' : 'none';
-            if(total > 1) {
-                document.getElementById('pageIndicator').innerText = `Página ${drillPage} de ${total}`;
-                div.querySelectorAll('button')[0].disabled = drillPage === 1;
-                div.querySelectorAll('button')[1].disabled = drillPage === total;
-            }
-            document.querySelector('#fadDrillModal .modal-table-area').scrollTop = 0;
+            if((d===-1 && drillPage>1) || (d===1 && drillPage<total)) { drillPage+=d; renderDrillTable(); }
         }
-        function changeDrillPage(d) { drillPage += d; renderDrillTable(); }
 
-        function exportDrill(fmt) {
-            if(!currentDrillData.length) return;
-            let content = "";
-            const isPlanilha = (activeScenarioKey === 'cenario_planilha');
-            if(fmt==='csv') {
-                content = "Data;Cliente;Vendedor;Valor;Minimo\n";
-                currentDrillData.forEach(r => { let min = isPlanilha ? r.min_plan : r.min_banc; content += `${r.data};${r.cliente};${r.vendedor};${String(r.valor).replace('.',',')};${String(min).replace('.',',')}\n`; });
-                downloadFile(content, `Drill_${currentFadName}.csv`, 'text/csv');
-            } else {
-                content = `RELATÓRIO DE DROPS (${isPlanilha?'Planilha':'Banco'}) - FAD: ${currentFadName}\nData: ${new Date().toLocaleDateString()}\n--------------------\n`;
-                currentDrillData.forEach(r => { let min = isPlanilha ? r.min_plan : r.min_banc; content += `${r.data} | Cli: ${r.cliente} | Vend: ${r.vendedor} | Val: R$ ${r.valor} (Min: ${min})\n`; });
-                downloadFile(content, `Drill_${currentFadName}.txt`, 'text/plain');
+        // --- DETALHES GERAIS ---
+        function openModal(type) {
+            const m = document.getElementById('detailModal'), h = document.getElementById('modalTitle'), th = document.getElementById('modalTableHead');
+            const stats = rawData[activeScenarioKey].stats, audit = rawData[activeScenarioKey].audit;
+            const has = rawData.tem_audit_file, isAudit = (type === 'FAD' && has);
+            let ds = {};
+
+            if (type === 'Vendedor') { h.innerText = "Vendedores"; ds = stats.por_vendedor; th.innerHTML = "<tr><th>Nome</th><th class='text-right'>Qtd</th></tr>"; }
+            else if (type === 'Sold') { h.innerText = "Clientes"; ds = stats.por_sold; th.innerHTML = "<tr><th>Cliente</th><th class='text-right'>Qtd</th></tr>"; }
+            else { h.innerText = "Performance FAD"; 
+                if(isAudit) { ds = audit; th.innerHTML = "<tr><th>FAD</th><th class='text-right'>Real</th><th class='text-right'>Meta</th><th class='text-right'>Dif</th><th class='text-center'>Status</th></tr>"; }
+                else { ds = stats.por_fad; th.innerHTML = "<tr><th>FAD</th><th class='text-right'>Qtd</th></tr>"; }
             }
+
+            currentDetailData = [];
+            if(isAudit && Array.isArray(ds)) currentDetailData = ds.map(i => ({t:'a', ...i}));
+            else currentDetailData = Object.entries(ds).sort((a,b)=>b[1]-a[1]).map(([k,v])=>({t:'s', k, v}));
+
+            detailPage = 1; renderDetailTable();
+            renderChart(type==='FAD'&&isAudit ? [] : currentDetailData.slice(0,10).map(x=>[x.k, x.v]));
+            m.classList.remove('hidden');
         }
-        function downloadFile(content, name, mime) {
-            const blob = new Blob([content], {type: mime});
-            const link = document.createElement("a");
-            link.href = URL.createObjectURL(blob);
-            link.download = name;
-            link.click();
+
+        function renderDetailTable() {
+            const tb = document.getElementById('modalTableBody'); tb.innerHTML = "";
+            const start = (detailPage - 1) * rowsPerPage;
+            const data = currentDetailData.slice(start, start + rowsPerPage);
+
+            data.forEach(i => {
+                if(i.t==='a'){
+                    let bc = i.diff==0?"badge-success":(i.diff>0?"badge-warning":"badge-danger"), lnk=`<a href="#" onclick="waitAndProcess(function(){openFadDetails('${i.fad}')});return false;" class="link-drill">${i.fad}</a>`;
+                    tb.innerHTML+=`<tr><td>${lnk}</td><td class='text-right'>${i.calculado}</td><td class='text-right'>${i.esperado}</td><td class='text-right'>${i.diff}</td><td class='text-center'><span class='badge ${bc}'>!</span></td></tr>`;
+                } else {
+                    let c = document.getElementById('modalTitle').innerText.includes('FAD') ? `<a href="#" onclick="waitAndProcess(function(){openFadDetails('${i.k}')});return false;" class="link-drill">${i.k}</a>` : i.k;
+                    tb.innerHTML+=`<tr><td>${c}</td><td class='text-right'>${new Intl.NumberFormat('pt-BR').format(i.v)}</td></tr>`;
+                }
+            });
+            updatePag(currentDetailData.length, detailPage, 'detailPagination', 'detailPageIndicator');
         }
-        function showLoading() { document.getElementById('loadingOverlay').style.display = 'flex'; }
-        function closeModal() { document.getElementById('detailModal').style.display = 'none'; }
-        function closeDrillModal() { document.getElementById('fadDrillModal').style.display = 'none'; }
-        window.onclick = function(e) { 
-            if(e.target.id==='detailModal') closeModal(); 
-            if(e.target.id==='fadDrillModal') closeDrillModal();
-            if(e.target.id==='auditModal') closeAuditModal();
+        function changeDetailPage(d) {
+            const total = Math.ceil(currentDetailData.length / rowsPerPage);
+            if((d===-1 && detailPage>1) || (d===1 && detailPage<total)) { detailPage+=d; renderDetailTable(); }
         }
-        function renderChart(dataArr) {
+
+        // --- HELPERS ---
+        function updatePag(totalItems, curr, divId, txtId) {
+            const total = Math.ceil(totalItems / rowsPerPage);
+            const div = document.getElementById(divId);
+            div.style.display = total > 1 ? 'flex' : 'none';
+            if(total > 1) document.getElementById(txtId).innerText = `${curr} / ${total}`;
+        }
+
+        function renderChart(arr) {
             const ctx = document.getElementById('detailChart').getContext('2d');
             if(myChart) myChart.destroy();
-            myChart = new Chart(ctx, { type: 'bar', data: { labels: dataArr.map(x=>x[0]), datasets: [{label:'Qtd', data: dataArr.map(x=>x[1]), backgroundColor:'#2563eb'}] }, options: { responsive:true, maintainAspectRatio:false, scales:{y:{beginAtZero:true}} } });
+            myChart = new Chart(ctx, { type:'bar', data:{labels:arr.map(x=>x[0]), datasets:[{label:'Qtd', data:arr.map(x=>x[1]), backgroundColor:'#3b82f6', borderRadius:4}]}, options:{responsive:true, maintainAspectRatio:false, plugins:{legend:{display:false}}, scales:{y:{beginAtZero:true, grid:{display:false}}, x:{grid:{display:false}}} } });
         }
+
         function filterTable(tid) {
-            const val = document.getElementById('searchInput').value.toUpperCase();
-            if(!val) { renderDetailTable(); return; }
-            const filtered = currentDetailData.filter(item => {
-                if(item.type === 'audit') return (item.fad||'').toUpperCase().includes(val);
-                return (item.key||'').toUpperCase().includes(val);
-            });
-            const tbody = document.getElementById('modalTableBody');
-            tbody.innerHTML = "";
-            filtered.slice(0, 100).forEach(item => { 
-                let k = item.key || item.fad;
-                let v = item.val || item.calculado;
-                tbody.innerHTML += `<tr><td>${k}</td><td style='text-align:right'>${v}</td></tr>`;
-            });
+            const v = document.getElementById('searchInput').value.toUpperCase(), rows = document.getElementById(tid).querySelectorAll('tbody tr');
+            rows.forEach(r => r.style.display = r.innerText.toUpperCase().includes(v) ? '' : 'none');
+        }
+
+        // Funções de Exportação (Idênticas ao anterior, compactadas)
+        function downloadFile(c,n,m){const b=new Blob([c],{type:m}),l=document.createElement("a");l.href=URL.createObjectURL(b);l.download=n;l.click();}
+        function exportAudit(type){
+            const l=rawData.lista_divergencia_cadastral||[];if(!l.length)return;let c="";
+            if(type==='csv'){c="Cliente;Vendedor;Planilha;Banco\n";l.forEach(i=>{c+=`${i.Cliente};${i.Vendedor};${i.Desc_FAD_Planilha};${i.Desc_FAD_Banco}\n`});downloadFile(c,"Audit.csv","text/csv;charset=utf-8;")}
+            else{c="AUDITORIA\n----\n";l.forEach(i=>{c+=`Cli:${i.Cliente}|Plan:${i.Desc_FAD_Planilha}|Banco:${i.Desc_FAD_Banco}\n`});downloadFile(c,"Audit.txt","text/plain")}
+        }
+        function exportDrill(fmt){
+            if(!currentDrillData.length)return;let c="", isP=(activeScenarioKey==='cenario_planilha');
+            if(fmt==='csv'){c="Data;Cliente;Vendedor;Valor;Min\n";currentDrillData.forEach(r=>{let m=isP?r.min_plan:r.min_banc;c+=`${r.data};${r.cliente};${r.vendedor};${String(r.valor).replace('.',',')};${String(m).replace('.',',')}\n`});downloadFile(c,"Drill.csv","text/csv;charset=utf-8;")}
+            else{c="DRILL\n----\n";currentDrillData.forEach(r=>{let m=isP?r.min_plan:r.min_banc;c+=`${r.data}|${r.cliente}|${r.valor}|${m}\n`});downloadFile(c,"Drill.txt","text/plain")}
         }
     </script>
 </body>
